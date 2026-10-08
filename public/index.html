@@ -60,7 +60,7 @@ const cur=()=>S.chats.find(c=>c.id===S.active);
 const lastIdx=c=>{if(c)for(let i=c.msgs.length;i--;)if(c.msgs[i].deck)return i;return -1};
 function deckHTML(d,btn){return `<div class="deck"><h2>${esc(d.title)}</h2><div class="sub">${esc(d.subtitle)}</div>`+
  d.slides.map((s,i)=>`<div class="sl"><h3>${i+1}. ${esc(s.title)}</h3>${s.chart?'<span class="tag">chart</span>':''}${s.stat?.value?`<span class="tag">${esc(s.stat.value)}</span>`:''}<ul>${s.bullets.map(b=>`<li>${esc(b)}</li>`).join("")}</ul></div>`).join("")+
- (btn?`<button class="dl" data-dl>Download .pptx</button><span class="hint">New random layout every download</span>`:"")+`</div>`}
+ (btn?`<button class="dl" data-dl="1">Download .pptx</button><span class="hint">New random layout every download</span>`:"")+`</div>`}
 function draw(){
  $("#list").innerHTML=S.chats.map(c=>`<div class="chat ${c.id===S.active?'on':''}"><button class="ti" data-open="${c.id}">${esc(c.title)}</button><button class="x" data-del="${c.id}" aria-label="Delete chat">&times;</button></div>`).join("")||'<div class="lbl">No chats yet</div>';
  const c=cur(),li=lastIdx(c);let h="";

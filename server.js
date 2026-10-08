@@ -1,3 +1,6 @@
+import "dotenv/config";
+import dns from "dns";
+dns.setDefaultResultOrder("ipv4first");
 import express from "express";
 import multer from "multer";
 import mammoth from "mammoth";
