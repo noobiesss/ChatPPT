@@ -1,4 +1,5 @@
 import express from "express";
+import "dotenv/config";
 import multer from "multer";
 import mammoth from "mammoth";
 import pdf from "pdf-parse";
