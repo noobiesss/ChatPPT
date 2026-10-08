@@ -1,4 +1,4 @@
-# Slidesmith
+# ChatPPT
 1. `npm install`
 2. `GROQ_API_KEY=gsk_... npm start` (Windows PowerShell: `$env:GROQ_API_KEY="gsk_..."; npm start`)
 3. Open http://localhost:3000
