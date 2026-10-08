@@ -1,57 +1,106 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Slidesmith – coursework to slides</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
+<title>ChatPPT</title>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@600;800&family=Figtree:wght@400;600&display=swap" rel="stylesheet">
 <style>
-:root{--ink:#12343b;--paper:#f4f6f7;--gold:#f2a900;--line:#cfd8da;--mut:#5c6f73}
-*{box-sizing:border-box}body{margin:0;background:var(--paper);color:#1e2b2e;font:16px/1.5 Figtree,system-ui,sans-serif}
-main{max-width:1000px;margin:0 auto;padding:40px 20px;display:grid;gap:32px;grid-template-columns:1fr 1fr}
-@media(max-width:800px){main{grid-template-columns:1fr}}
-h1{font:800 clamp(34px,5vw,52px)/1.05 Fraunces,Georgia,serif;color:var(--ink);margin:0 0 8px}
-header{grid-column:1/-1;border-left:10px solid var(--gold);padding-left:18px}header p{margin:0;color:var(--mut);max-width:60ch}
-label{display:block;font-weight:600;margin:14px 0 4px}
-textarea,input,select{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:6px;background:#fff;font:inherit}
-textarea{min-height:190px;resize:vertical}
-.drop{border:2px dashed var(--line);border-radius:6px;padding:16px;text-align:center;color:var(--mut);cursor:pointer}
-.drop.on{border-color:var(--gold);background:#fff8e6}
-.row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-button{background:var(--ink);color:#fff;border:0;border-radius:6px;padding:12px 20px;font:600 16px Figtree,sans-serif;cursor:pointer;margin-top:18px}
-button:hover{background:#0c2429}button:disabled{opacity:.5;cursor:wait}button.alt{background:var(--gold);color:var(--ink)}
-button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:3px solid var(--gold);outline-offset:2px}
-#files{font-size:14px;color:var(--mut);margin-top:6px}#err{color:#a12622;margin-top:12px}
-.slide{background:#fff;border:1px solid var(--line);border-left:6px solid var(--ink);border-radius:4px;padding:12px 14px;margin-bottom:10px}
-.slide h3{margin:0 0 4px;font:600 17px Fraunces,Georgia,serif;color:var(--ink)}.slide ul{margin:0;padding-left:18px}
-.empty{color:var(--mut);border:1px dashed var(--line);border-radius:6px;padding:28px;text-align:center}
-</style></head><body><main>
-<header><h1>Slidesmith</h1><p>Drop in your coursework brief or notes. Get an editable PowerPoint with speaker notes.</p></header>
-<section>
-  <label for="text">Paste your brief or notes</label><textarea id="text" placeholder="Paste the assignment spec, rubric, or notes here"></textarea>
-  <div class="drop" id="drop" tabindex="0" role="button">Drop files here or click to upload (.docx, .pdf, .txt, .md)</div>
-  <input type="file" id="file" multiple accept=".docx,.pdf,.txt,.md" hidden><div id="files"></div>
-  <div class="row"><div><label for="slides">Content slides</label><input id="slides" type="number" min="3" max="20" value="8"></div>
-  <div><label for="tone">Tone</label><select id="tone"><option>clear and professional</option><option>simple and student-friendly</option><option>persuasive</option><option>academic</option></select></div></div>
-  <label for="aud">Audience</label><input id="aud" value="university lecturers">
-  <button id="go">Generate outline</button><div id="err" role="alert"></div>
-</section>
-<section><div id="out" class="empty">Your slide outline will appear here. Review it, then download.</div></section>
-</main>
+:root{--bg:#131314;--panel:#1e1f20;--line:#333536;--tx:#e6e8e8;--mut:#9aa3a5;--gold:#f2a900;--ink:#12343b}
+*{box-sizing:border-box}html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--tx);font:15px/1.5 Figtree,system-ui,sans-serif;display:flex}
+button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
+button:focus-visible,textarea:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+#side{width:270px;background:var(--panel);padding:14px 10px;display:flex;flex-direction:column;gap:8px;flex-shrink:0}
+.brand{font:800 24px Fraunces,Georgia,serif;padding:4px 10px 10px}.brand b{color:var(--gold)}
+#new{background:var(--bg);border-radius:20px;padding:10px 16px;text-align:left;font-weight:600}#new:hover{background:#2a2b2c}
+.lbl{color:var(--mut);font-size:12px;padding:10px 10px 2px}
+#list{overflow:auto;flex:1}.chat{display:flex;align-items:center;border-radius:18px;padding-left:12px}
+.chat:hover,.chat.on{background:#2a2b2c}.chat .ti{flex:1;text-align:left;padding:8px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chat .x{visibility:hidden;color:var(--mut);padding:6px 10px}.chat:hover .x,.chat .x:focus-visible{visibility:visible}.x:hover{color:#ff7b72}
+#main{flex:1;display:flex;flex-direction:column;min-width:0;position:relative}
+#bar{display:none;padding:10px}#thread{flex:1;overflow:auto;padding:24px 20px}
+.w{max-width:820px;margin:0 auto}
+.empty{text-align:center;margin-top:18vh}.empty h1{font:800 clamp(30px,5vw,46px)/1.1 Fraunces,Georgia,serif;margin:0 0 10px}.empty p{color:var(--mut)}
+.u{margin:18px 0 18px auto;max-width:80%;background:#2a2b2c;border-radius:20px 20px 4px 20px;padding:10px 16px;white-space:pre-wrap}
+.u small{display:block;color:var(--gold)}
+.a{margin:18px 0}.a>p{margin:0 0 10px}.err{color:#ff7b72}
+.deck{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:14px}
+.deck h2{font:600 22px Fraunces,Georgia,serif;margin:0}.deck .sub{color:var(--mut);margin-bottom:10px}
+.sl{border-left:4px solid var(--gold);background:var(--bg);border-radius:8px;padding:8px 12px;margin:8px 0}
+.sl h3{margin:0 0 2px;font-size:15px}.sl ul{margin:0;padding-left:18px;color:#c9d0d2}.tag{display:inline-block;font-size:11px;background:#33383a;border-radius:10px;padding:0 8px;margin-right:6px;color:var(--gold)}
+.dl{background:var(--gold);color:var(--ink);font-weight:600;border-radius:20px;padding:9px 18px;margin-top:6px}.hint{color:var(--mut);font-size:12px;margin-left:8px}
+details{margin:6px 0}summary{cursor:pointer;color:var(--mut)}
+#comp{padding:0 20px 18px}.box{max-width:820px;margin:0 auto;background:var(--panel);border-radius:26px;padding:10px 12px}
+.box.drag{outline:2px dashed var(--gold)}
+#t{width:100%;background:none;border:0;color:inherit;font:inherit;resize:none;max-height:160px;padding:6px 8px}#t:focus{outline:0}
+.chips{display:flex;flex-wrap:wrap;gap:6px;padding:2px 6px}.chip{background:#2f3132;border-radius:14px;padding:3px 4px 3px 12px;font-size:13px}
+.chip button{color:var(--mut);padding:0 8px;font-size:16px}.chip button:hover{color:#ff7b72}
+.row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.row .sp{flex:1}
+.ic{width:38px;height:38px;border-radius:50%;font-size:22px}.ic:hover{background:#2f3132}
+.send{background:var(--gold);color:var(--ink);font-weight:600;border-radius:20px;padding:8px 18px}.send:disabled{opacity:.4}
+.opt{display:flex;gap:6px;align-items:center;color:var(--mut);font-size:13px}
+.opt input,.opt select{background:#2f3132;color:var(--tx);border:0;border-radius:10px;padding:4px 8px;font:inherit}.opt input{width:56px}
+@media(max-width:800px){#side{position:fixed;inset:0 auto 0 0;z-index:5;transform:translateX(-100%);transition:.2s}#side.open{transform:none}#bar{display:block}}
+</style></head><body>
+<aside id="side"><div class="brand">Chat<b>PPT</b></div><button id="new">+ New chat</button><div class="lbl">Chats</div><div id="list"></div></aside>
+<main id="main"><div id="bar"><button id="menu" class="ic" aria-label="Menu">&#9776;</button></div>
+<div id="thread"><div class="w" id="msgs"></div></div>
+<div id="comp"><div class="box" id="box"><div class="chips" id="chips"></div>
+<textarea id="t" rows="1" placeholder="Paste your brief, attach files, or ask for changes"></textarea>
+<div class="row"><button class="ic" id="plus" title="Attach files" aria-label="Attach files">+</button>
+<input type="file" id="file" multiple accept=".docx,.pdf,.txt,.md" hidden>
+<span class="opt" id="opt">Slides <input id="n" type="number" min="3" max="20" value="8" aria-label="Number of slides">
+<select id="tone" aria-label="Tone"><option>clear and professional</option><option>simple and student-friendly</option><option>persuasive</option><option>academic</option></select></span>
+<span class="sp"></span><button class="send" id="go">Send</button></div></div></div></main>
 <script>
-const $=id=>document.getElementById(id);let files=[],deck=null;
-const add=l=>{files=[...files,...l].slice(0,5);$("files").textContent=files.map(f=>f.name).join(", ")};
-$("drop").onclick=()=>$("file").click();$("drop").onkeydown=e=>e.key==="Enter"&&$("file").click();
-$("file").onchange=e=>add(e.target.files);
-$("drop").ondragover=e=>{e.preventDefault();$("drop").classList.add("on")};
-$("drop").ondragleave=()=>$("drop").classList.remove("on");
-$("drop").ondrop=e=>{e.preventDefault();$("drop").classList.remove("on");add(e.dataTransfer.files)};
-const esc=s=>String(s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
-function render(){$("out").className="";$("out").innerHTML=`<div class="slide" style="border-left-color:var(--gold)"><h3>${esc(deck.title)}</h3>${esc(deck.subtitle||"")}</div>`+
-deck.slides.map(s=>`<div class="slide"><h3>${esc(s.title)}</h3><ul>${s.bullets.map(b=>`<li>${esc(b)}</li>`).join("")}</ul></div>`).join("")+
-`<button class="alt" id="dl">Download .pptx</button>`;$("dl").onclick=download}
-$("go").onclick=async()=>{$("err").textContent="";$("go").disabled=true;$("go").textContent="Generating…";
- const fd=new FormData();fd.append("text",$("text").value);fd.append("slides",$("slides").value);fd.append("tone",$("tone").value);fd.append("audience",$("aud").value);files.forEach(f=>fd.append("files",f));
- try{const r=await fetch("/api/outline",{method:"POST",body:fd});const j=await r.json();if(!r.ok)throw new Error(j.error);deck=j;render()}
- catch(e){$("err").textContent=e.message}finally{$("go").disabled=false;$("go").textContent="Generate outline"}};
-async function download(){const r=await fetch("/api/pptx",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(deck)});
- const a=document.createElement("a");a.href=URL.createObjectURL(await r.blob());a.download=(deck.title||"slides").replace(/[^\w ]/g,"")+".pptx";a.click()}
+const $=s=>document.querySelector(s),KEY="chatppt.v1",uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+let S;try{S=JSON.parse(localStorage.getItem(KEY))}catch{}S=S||{chats:[],active:null};
+let pending=[],busy=false;
+const save=()=>{try{localStorage.setItem(KEY,JSON.stringify(S))}catch{}};
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const cur=()=>S.chats.find(c=>c.id===S.active);
+const lastIdx=c=>{if(c)for(let i=c.msgs.length;i--;)if(c.msgs[i].deck)return i;return -1};
+function deckHTML(d,btn){return `<div class="deck"><h2>${esc(d.title)}</h2><div class="sub">${esc(d.subtitle)}</div>`+
+ d.slides.map((s,i)=>`<div class="sl"><h3>${i+1}. ${esc(s.title)}</h3>${s.chart?'<span class="tag">chart</span>':''}${s.stat?.value?`<span class="tag">${esc(s.stat.value)}</span>`:''}<ul>${s.bullets.map(b=>`<li>${esc(b)}</li>`).join("")}</ul></div>`).join("")+
+ (btn?`<button class="dl" data-dl>Download .pptx</button><span class="hint">New random layout every download</span>`:"")+`</div>`}
+function draw(){
+ $("#list").innerHTML=S.chats.map(c=>`<div class="chat ${c.id===S.active?'on':''}"><button class="ti" data-open="${c.id}">${esc(c.title)}</button><button class="x" data-del="${c.id}" aria-label="Delete chat">&times;</button></div>`).join("")||'<div class="lbl">No chats yet</div>';
+ const c=cur(),li=lastIdx(c);let h="";
+ if(!c)h='<div class="empty"><h1>What are we presenting?</h1><p>Paste an assignment brief or attach a document. Then keep chatting to refine the slides.</p></div>';
+ else c.msgs.forEach((m,i)=>{
+  if(m.role==="user")h+=`<div class="u">${esc(m.text)}${m.files?.length?`<small>${m.files.map(esc).join(", ")}</small>`:""}</div>`;
+  else h+=`<div class="a"><p class="${m.err?'err':''}">${esc(m.text)}</p>`+(m.deck?(i===li?deckHTML(m.deck,true):`<details><summary>Earlier version: ${esc(m.deck.title)}</summary>${deckHTML(m.deck)}</details>`):"")+`</div>`});
+ if(busy)h+='<div class="a"><p>Working on it…</p></div>';
+ $("#msgs").innerHTML=h;$("#thread").scrollTop=1e9;
+ $("#chips").innerHTML=pending.map((f,i)=>`<span class="chip">${esc(f.name)}<button data-rm="${i}" aria-label="Remove ${esc(f.name)}">&times;</button></span>`).join("");
+ $("#opt").style.display=li<0?"flex":"none";$("#go").disabled=busy;
+}
+function add(l){for(const f of l){if(f.size>10485760){alert(f.name+" is over 10 MB");continue}
+ if(pending.length<5&&!pending.some(p=>p.name===f.name))pending.push(f)}draw()}
+$("#plus").onclick=()=>$("#file").click();$("#file").onchange=e=>{add(e.target.files);e.target.value=""};
+const box=$("#box");box.ondragover=e=>{e.preventDefault();box.classList.add("drag")};box.ondragleave=()=>box.classList.remove("drag");
+box.ondrop=e=>{e.preventDefault();box.classList.remove("drag");add(e.dataTransfer.files)};
+$("#new").onclick=()=>{S.active=null;pending=[];$("#side").classList.remove("open");draw()};
+$("#menu").onclick=()=>$("#side").classList.toggle("open");
+document.addEventListener("click",async e=>{const t=e.target;
+ if(t.dataset.open){S.active=t.dataset.open;save();$("#side").classList.remove("open");draw()}
+ if(t.dataset.del&&confirm("Delete this chat?")){S.chats=S.chats.filter(c=>c.id!==t.dataset.del);if(S.active===t.dataset.del)S.active=null;save();draw()}
+ if(t.dataset.rm){pending.splice(+t.dataset.rm,1);draw()}
+ if(t.dataset.dl){const c=cur(),d=c.msgs[lastIdx(c)].deck;t.disabled=true;
+  try{const r=await fetch("/api/pptx",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});if(!r.ok)throw 0;
+   const a=document.createElement("a");a.href=URL.createObjectURL(await r.blob());a.download=(d.title||"slides").replace(/[^\w ]/g,"")+".pptx";a.click()}
+  catch{alert("Download failed")}t.disabled=false}});
+async function send(){
+ const text=$("#t").value.trim();if(busy||(!text&&!pending.length))return;
+ let c=cur();if(!c){c={id:uid(),title:"New chat",msgs:[]};S.chats.unshift(c);S.active=c.id}
+ const deck=c.msgs[lastIdx(c)]?.deck,fd=new FormData();
+ fd.append("text",text);fd.append("slides",$("#n").value);fd.append("tone",$("#tone").value);
+ if(deck)fd.append("deck",JSON.stringify(deck));pending.forEach(f=>fd.append("files",f));
+ c.msgs.push({role:"user",text,files:pending.map(f=>f.name)});pending=[];$("#t").value="";$("#t").style.height="";busy=true;save();draw();
+ try{const r=await fetch("/api/outline",{method:"POST",body:fd}),j=await r.json();if(!r.ok)throw new Error(j.error);
+  const {reply,...d}=j;c.msgs.push({role:"assistant",text:reply||"Here is your deck.",deck:d});if(c.title==="New chat")c.title=d.title||"Untitled deck"}
+ catch(e){c.msgs.push({role:"assistant",text:"Something went wrong: "+e.message,err:true})}
+ busy=false;save();draw()}
+$("#go").onclick=send;
+$("#t").onkeydown=e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send()}};
+$("#t").oninput=e=>{e.target.style.height="auto";e.target.style.height=e.target.scrollHeight+"px"};
+draw();
 </script></body></html>
