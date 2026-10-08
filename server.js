@@ -1,5 +1,4 @@
 import express from "express";
-import "dotenv/config";
 import multer from "multer";
 import mammoth from "mammoth";
 import pdf from "pdf-parse";
@@ -33,19 +32,20 @@ const ICONS = ["lightbulb","target","users","book-open","rocket","shield","globe
   "code","database","heart","star","trending-up","settings","graduation-cap","scale","leaf","brain",
   "message-square","file-text","calendar","zap","lock","map-pin","award","puzzle","layers","camera"];
 
-async function askGroq(text, { slides, audience, tone }) {
-  const system = `You turn coursework briefs and documents into presentation content.
-Return ONLY JSON: {"title":string,"subtitle":string,"icon":string,"slides":[{"title":string,"bullets":[string],"notes":string,"icon":string,"image_query":string,"stat":{"value":string,"label":string}|null,"chart":{"type":"bar"|"pie"|"doughnut"|"line","title":string,"labels":[string],"values":[number]}|null}]}.
-Rules: exactly ${slides} content slides; 3-4 bullets each, max 14 words per bullet; slide titles state the point;
-cover every requirement/marking criterion in the source; notes = 2-3 sentences for the presenter.
-"icon" must be one of: ${ICONS.join(", ")}. "image_query" = 1-3 concrete words for a stock photo.
-Use "stat" (a key number such as "40%" or "3 phases") on at most 2 slides, and "chart" on at most 2 slides, ONLY when the source really contains those numbers or categories; otherwise null. Never invent data.
-Audience: ${audience}. Tone: ${tone}.`;
+const SCHEMA = `{"reply":string,"title":string,"subtitle":string,"icon":string,"slides":[{"title":string,"bullets":[string],"notes":string,"icon":string,"image_query":string,"stat":{"value":string,"label":string}|null,"chart":{"type":"bar"|"pie"|"doughnut"|"line","title":string,"labels":[string],"values":[number]}|null}]}`;
+const RULES = `"reply" = one friendly sentence on what you made or changed. "icon" must be one of: ${ICONS.join(", ")}. "image_query" = 1-3 concrete words for a stock photo. 3-4 bullets per slide, max 14 words each. Slide titles state the point; notes = 2-3 sentences for the presenter. Use "stat" or "chart" only when the source really has those numbers (max 2 each), otherwise null. Never invent data.`;
+
+async function askGroq(text, o) {
+  const system = o.deck
+    ? `You edit an existing presentation. Apply the user's instruction and return ONLY the full updated JSON: ${SCHEMA}. Keep slides the user did not mention unchanged. ${RULES}`
+    : `You turn coursework briefs and documents into presentation content. Return ONLY JSON: ${SCHEMA}. Exactly ${o.slides} content slides; cover every requirement and marking criterion in the source. Audience: ${o.audience}. Tone: ${o.tone}. ${RULES}`;
+  const body = text.slice(0, 24000);
+  const user = o.deck ? `CURRENT DECK:\n${JSON.stringify(o.deck)}\n\nINSTRUCTION AND ANY NEW MATERIAL:\n${body}` : body;
   const r = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: { Authorization: `Bearer ${KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({ model: MODEL, temperature: 0.4, response_format: { type: "json_object" },
-      messages: [{ role: "system", content: system }, { role: "user", content: text.slice(0, 24000) }] }),
+      messages: [{ role: "system", content: system }, { role: "user", content: user }] }),
   });
   if (!r.ok) throw new Error(`Groq error ${r.status}: ${(await r.text()).slice(0, 200)}`);
   const d = JSON.parse((await r.json()).choices[0].message.content);
@@ -177,11 +177,14 @@ async function buildPptx(d) {
 
 app.post("/api/outline", upload.array("files", 5), async (req, res) => {
   try {
+    let deck = null;
+    try { deck = JSON.parse(req.body.deck); } catch {}
     let text = (req.body.text || "").trim();
     for (const f of req.files || []) text += `\n\n--- ${f.originalname} ---\n` + (await extractText(f));
-    if (text.length < 30) return res.status(400).json({ error: "Add a brief, paste text, or upload a file first." });
+    if (!deck && text.length < 30) return res.status(400).json({ error: "Add a brief, paste text, or attach a file first." });
+    if (deck && !text) return res.status(400).json({ error: "Tell me what to change." });
     const slides = Math.min(Math.max(parseInt(req.body.slides) || 8, 3), 20);
-    res.json(await askGroq(text, { slides, audience: req.body.audience || "university lecturers", tone: req.body.tone || "clear and professional" }));
+    res.json(await askGroq(text, { deck, slides, audience: req.body.audience || "university lecturers", tone: req.body.tone || "clear and professional" }));
   } catch (e) { console.error(e); res.status(500).json({ error: e.message }); }
 });
 
@@ -194,4 +197,4 @@ app.post("/api/pptx", async (req, res) => {
   } catch (e) { console.error(e); res.status(500).json({ error: e.message }); }
 });
 
-app.listen(process.env.PORT || 3000, () => console.log("Slidesmith running"));
+app.listen(process.env.PORT || 3000, () => console.log("ChatPPT running at http://localhost:" + (process.env.PORT || 3000)));
