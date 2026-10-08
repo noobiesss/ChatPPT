@@ -1,0 +1,57 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Slidesmith – coursework to slides</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@600;800&family=Figtree:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root{--ink:#12343b;--paper:#f4f6f7;--gold:#f2a900;--line:#cfd8da;--mut:#5c6f73}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:#1e2b2e;font:16px/1.5 Figtree,system-ui,sans-serif}
+main{max-width:1000px;margin:0 auto;padding:40px 20px;display:grid;gap:32px;grid-template-columns:1fr 1fr}
+@media(max-width:800px){main{grid-template-columns:1fr}}
+h1{font:800 clamp(34px,5vw,52px)/1.05 Fraunces,Georgia,serif;color:var(--ink);margin:0 0 8px}
+header{grid-column:1/-1;border-left:10px solid var(--gold);padding-left:18px}header p{margin:0;color:var(--mut);max-width:60ch}
+label{display:block;font-weight:600;margin:14px 0 4px}
+textarea,input,select{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:6px;background:#fff;font:inherit}
+textarea{min-height:190px;resize:vertical}
+.drop{border:2px dashed var(--line);border-radius:6px;padding:16px;text-align:center;color:var(--mut);cursor:pointer}
+.drop.on{border-color:var(--gold);background:#fff8e6}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+button{background:var(--ink);color:#fff;border:0;border-radius:6px;padding:12px 20px;font:600 16px Figtree,sans-serif;cursor:pointer;margin-top:18px}
+button:hover{background:#0c2429}button:disabled{opacity:.5;cursor:wait}button.alt{background:var(--gold);color:var(--ink)}
+button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:3px solid var(--gold);outline-offset:2px}
+#files{font-size:14px;color:var(--mut);margin-top:6px}#err{color:#a12622;margin-top:12px}
+.slide{background:#fff;border:1px solid var(--line);border-left:6px solid var(--ink);border-radius:4px;padding:12px 14px;margin-bottom:10px}
+.slide h3{margin:0 0 4px;font:600 17px Fraunces,Georgia,serif;color:var(--ink)}.slide ul{margin:0;padding-left:18px}
+.empty{color:var(--mut);border:1px dashed var(--line);border-radius:6px;padding:28px;text-align:center}
+</style></head><body><main>
+<header><h1>Slidesmith</h1><p>Drop in your coursework brief or notes. Get an editable PowerPoint with speaker notes.</p></header>
+<section>
+  <label for="text">Paste your brief or notes</label><textarea id="text" placeholder="Paste the assignment spec, rubric, or notes here"></textarea>
+  <div class="drop" id="drop" tabindex="0" role="button">Drop files here or click to upload (.docx, .pdf, .txt, .md)</div>
+  <input type="file" id="file" multiple accept=".docx,.pdf,.txt,.md" hidden><div id="files"></div>
+  <div class="row"><div><label for="slides">Content slides</label><input id="slides" type="number" min="3" max="20" value="8"></div>
+  <div><label for="tone">Tone</label><select id="tone"><option>clear and professional</option><option>simple and student-friendly</option><option>persuasive</option><option>academic</option></select></div></div>
+  <label for="aud">Audience</label><input id="aud" value="university lecturers">
+  <button id="go">Generate outline</button><div id="err" role="alert"></div>
+</section>
+<section><div id="out" class="empty">Your slide outline will appear here. Review it, then download.</div></section>
+</main>
+<script>
+const $=id=>document.getElementById(id);let files=[],deck=null;
+const add=l=>{files=[...files,...l].slice(0,5);$("files").textContent=files.map(f=>f.name).join(", ")};
+$("drop").onclick=()=>$("file").click();$("drop").onkeydown=e=>e.key==="Enter"&&$("file").click();
+$("file").onchange=e=>add(e.target.files);
+$("drop").ondragover=e=>{e.preventDefault();$("drop").classList.add("on")};
+$("drop").ondragleave=()=>$("drop").classList.remove("on");
+$("drop").ondrop=e=>{e.preventDefault();$("drop").classList.remove("on");add(e.dataTransfer.files)};
+const esc=s=>String(s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+function render(){$("out").className="";$("out").innerHTML=`<div class="slide" style="border-left-color:var(--gold)"><h3>${esc(deck.title)}</h3>${esc(deck.subtitle||"")}</div>`+
+deck.slides.map(s=>`<div class="slide"><h3>${esc(s.title)}</h3><ul>${s.bullets.map(b=>`<li>${esc(b)}</li>`).join("")}</ul></div>`).join("")+
+`<button class="alt" id="dl">Download .pptx</button>`;$("dl").onclick=download}
+$("go").onclick=async()=>{$("err").textContent="";$("go").disabled=true;$("go").textContent="Generating…";
+ const fd=new FormData();fd.append("text",$("text").value);fd.append("slides",$("slides").value);fd.append("tone",$("tone").value);fd.append("audience",$("aud").value);files.forEach(f=>fd.append("files",f));
+ try{const r=await fetch("/api/outline",{method:"POST",body:fd});const j=await r.json();if(!r.ok)throw new Error(j.error);deck=j;render()}
+ catch(e){$("err").textContent=e.message}finally{$("go").disabled=false;$("go").textContent="Generate outline"}};
+async function download(){const r=await fetch("/api/pptx",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(deck)});
+ const a=document.createElement("a");a.href=URL.createObjectURL(await r.blob());a.download=(deck.title||"slides").replace(/[^\w ]/g,"")+".pptx";a.click()}
+</script></body></html>
