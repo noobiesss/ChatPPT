@@ -35,15 +35,24 @@ const ICONS = ["lightbulb","target","users","book-open","rocket","shield","globe
   "code","database","heart","star","trending-up","settings","graduation-cap","scale","leaf","brain",
   "message-square","file-text","calendar","zap","lock","map-pin","award","puzzle","layers","camera"];
 
-const SCHEMA = `{"reply":string,"title":string,"subtitle":string,"icon":string,"slides":[{"title":string,"bullets":[string],"notes":string,"icon":string,"image_query":string,"stat":{"value":string,"label":string}|null,"chart":{"type":"bar"|"pie"|"doughnut"|"line","title":string,"labels":[string],"values":[number]}|null}]}`;
-const RULES = `"reply" = one friendly sentence on what you made or changed. "icon" must be one of: ${ICONS.join(", ")}. "image_query" = 1-3 concrete words for a stock photo. 3-4 bullets per slide, max 14 words each. Slide titles state the point; notes = 2-3 sentences for the presenter. Use "stat" or "chart" only when the source really has those numbers (max 2 each), otherwise null. Never invent data.`;
+const DECK = `{"title":string,"subtitle":string,"icon":string,"slides":[{"title":string,"bullets":[string],"notes":string,"icon":string,"image_query":string,"stat":{"value":string,"label":string}|null,"chart":{"type":"bar"|"pie"|"doughnut"|"line","title":string,"labels":[string],"values":[number]}|null}]}`;
+const RULES = `Deck rules: "icon" must be one of: ${ICONS.join(", ")}. "image_query" = 1-3 concrete words for a stock photo. 3-4 bullets per slide, max 14 words each. Slide titles state the point; notes = 2-3 sentences for the presenter. Use "stat" or "chart" only when the source really has those numbers (max 2 each), otherwise null. Never invent data. With no source material, use well-established general knowledge and avoid specific statistics.`;
 
-async function askGroq(text, o) {
-  const system = o.deck
-    ? `You edit an existing presentation. Apply the user's instruction and return ONLY the full updated JSON: ${SCHEMA}. Keep slides the user did not mention unchanged. ${RULES}`
-    : `You turn coursework briefs and documents into presentation content. Return ONLY JSON: ${SCHEMA}. Exactly ${o.slides} content slides; cover every requirement and marking criterion in the source. Audience: ${o.audience}. Tone: ${o.tone}. ${RULES}`;
-  const body = text.slice(0, 24000);
-  const user = o.deck ? `CURRENT DECK:\n${JSON.stringify(o.deck)}\n\nINSTRUCTION AND ANY NEW MATERIAL:\n${body}` : body;
+async function askGroq(o) {
+  const system = `You are ChatPPT, a friendly assistant that both answers questions and builds PowerPoint decks for coursework.
+Return ONLY JSON: {"reply": string, "deck": ${DECK} | null}.
+Decide from the user's message:
+1. Question, chat, advice or explanation (for example about the assignment, the slides, or the topic): answer helpfully in "reply" (plain text, up to about 150 words, short paragraphs), use the SOURCE MATERIAL when relevant, and set "deck" to null.
+2. Request to make slides, or a pasted/attached brief with no other instruction: build a full deck with exactly ${o.slides} content slides (or the number the user asks for), covering every requirement and marking criterion in the source. Audience: ${o.audience}. Tone: ${o.tone}.
+3. Request to change the CURRENT DECK: return the FULL updated deck and keep slides the user did not mention unchanged.
+When you return a deck, "reply" is one friendly sentence about what you made or changed.
+${RULES}`;
+  const user = [
+    o.source && `SOURCE MATERIAL:\n${o.source.slice(0, 20000)}`,
+    o.deck && `CURRENT DECK:\n${JSON.stringify(o.deck)}`,
+    o.history.length && `RECENT CHAT:\n${o.history.slice(-6).map(m => `${m.role}: ${String(m.text).slice(0, 600)}`).join("\n")}`,
+    `USER MESSAGE:\n${o.text || "(files attached, no message)"}`,
+  ].filter(Boolean).join("\n\n");
   const r = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: { Authorization: `Bearer ${KEY}`, "Content-Type": "application/json" },
@@ -51,9 +60,17 @@ async function askGroq(text, o) {
       messages: [{ role: "system", content: system }, { role: "user", content: user }] }),
   });
   if (!r.ok) throw new Error(`Groq error ${r.status}: ${(await r.text()).slice(0, 200)}`);
-  const d = JSON.parse((await r.json()).choices[0].message.content);
-  d.slides = (d.slides || []).map(s => ({ ...s, bullets: (s.bullets || []).slice(0, 5) }));
-  return d;
+  const out = JSON.parse((await r.json()).choices[0].message.content);
+  const reply = String(out.reply || "").trim();
+  if (!out.deck) return { reply: reply || "I'm here. Ask me a question, or tell me what slides to make.", deck: null };
+  const good = s => s && s.title && Array.isArray(s.bullets) && s.bullets.some(b => String(b).trim());
+  const slides = (out.deck.slides || []).filter(good).map(s => ({ ...s, bullets: s.bullets.slice(0, 5) }));
+  if (!slides.length) return { reply: reply || "I couldn't build slides from that. Could you tell me more?", deck: null };
+  if (o.deck && slides.length < o.deck.slides.length / 2 && !/(fewer|shorter|reduce|cut|remove|delete|only)/i.test(o.text))
+    return { reply: "That change looked wrong, so I kept your deck as it was. Could you rephrase it?", deck: null };
+  const base = o.deck || {};
+  return { reply: reply || "Here is your deck.", deck: { ...base, ...out.deck, title: out.deck.title || base.title || "Untitled deck",
+    subtitle: out.deck.subtitle ?? base.subtitle ?? "", icon: out.deck.icon || base.icon, slides } };
 }
 
 // ---------- visuals ----------
@@ -268,14 +285,17 @@ async function buildPptx(d) {
 
 app.post("/api/outline", upload.array("files", 5), async (req, res) => {
   try {
-    let deck = null;
-    try { deck = JSON.parse(req.body.deck); } catch {}
-    let text = (req.body.text || "").trim();
-    for (const f of req.files || []) text += `\n\n--- ${f.originalname} ---\n` + (await extractText(f));
-    if (!deck && text.length < 30) return res.status(400).json({ error: "Add a brief, paste text, or attach a file first." });
-    if (deck && !text) return res.status(400).json({ error: "Tell me what to change." });
+    const J = k => { try { return JSON.parse(req.body[k]); } catch { return null; } };
+    const deck = J("deck"), history = Array.isArray(J("history")) ? J("history") : [];
+    const text = (req.body.text || "").trim();
+    let material = "";
+    for (const f of req.files || []) material += `\n\n--- ${f.originalname} ---\n` + (await extractText(f));
+    if (text.length >= 200) material += "\n\n" + text; // a long pasted brief counts as source material
+    if (!text && !material.trim()) return res.status(400).json({ error: "Type a message or attach a file first." });
+    const source = ((req.body.source || "") + material).slice(0, 30000);
     const slides = Math.min(Math.max(parseInt(req.body.slides) || 8, 3), 20);
-    res.json(await askGroq(text, { deck, slides, audience: req.body.audience || "university lecturers", tone: req.body.tone || "clear and professional" }));
+    const out = await askGroq({ text, source, deck, history, slides, audience: req.body.audience || "university lecturers", tone: req.body.tone || "clear and professional" });
+    res.json({ ...out, source });
   } catch (e) { console.error(e); res.status(500).json({ error: e.message }); }
 });
 

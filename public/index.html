@@ -21,7 +21,7 @@ button:focus-visible,textarea:focus-visible,select:focus-visible,input:focus-vis
 .empty{text-align:center;margin-top:18vh}.empty h1{font:800 clamp(30px,5vw,46px)/1.1 Fraunces,Georgia,serif;margin:0 0 10px}.empty p{color:var(--mut)}
 .u{margin:18px 0 18px auto;max-width:80%;background:#2a2b2c;border-radius:20px 20px 4px 20px;padding:10px 16px;white-space:pre-wrap}
 .u small{display:block;color:var(--gold)}
-.a{margin:18px 0}.a>p{margin:0 0 10px}.err{color:#ff7b72}
+.a{margin:18px 0}.a>p{margin:0 0 10px;white-space:pre-wrap}.err{color:#ff7b72}
 .deck{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:14px}
 .deck h2{font:600 22px Fraunces,Georgia,serif;margin:0}.deck .sub{color:var(--mut);margin-bottom:10px}
 .sl{border-left:4px solid var(--gold);background:var(--bg);border-radius:8px;padding:8px 12px;margin:8px 0}
@@ -44,7 +44,7 @@ details{margin:6px 0}summary{cursor:pointer;color:var(--mut)}
 <main id="main"><div id="bar"><button id="menu" class="ic" aria-label="Menu">&#9776;</button></div>
 <div id="thread"><div class="w" id="msgs"></div></div>
 <div id="comp"><div class="box" id="box"><div class="chips" id="chips"></div>
-<textarea id="t" rows="1" placeholder="Paste your brief, attach files, or ask for changes"></textarea>
+<textarea id="t" rows="1" placeholder="Ask a question, paste a brief, attach files, or ask for slide changes"></textarea>
 <div class="row"><button class="ic" id="plus" title="Attach files" aria-label="Attach files">+</button>
 <input type="file" id="file" multiple accept=".docx,.pdf,.txt,.md" hidden>
 <span class="opt" id="opt">Slides <input id="n" type="number" min="3" max="20" value="8" aria-label="Number of slides">
@@ -57,17 +57,18 @@ let pending=[],busy=false;
 const save=()=>{try{localStorage.setItem(KEY,JSON.stringify(S))}catch{}};
 const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const cur=()=>S.chats.find(c=>c.id===S.active);
-const lastIdx=c=>{if(c)for(let i=c.msgs.length;i--;)if(c.msgs[i].deck)return i;return -1};
+const valid=d=>d&&d.slides?.length&&d.slides.every(s=>s.bullets?.length);
+const lastIdx=c=>{if(c)for(let i=c.msgs.length;i--;)if(valid(c.msgs[i].deck))return i;return -1};
 function deckHTML(d,btn){return `<div class="deck"><h2>${esc(d.title)}</h2><div class="sub">${esc(d.subtitle)}</div>`+
  d.slides.map((s,i)=>`<div class="sl"><h3>${i+1}. ${esc(s.title)}</h3>${s.chart?'<span class="tag">chart</span>':''}${s.stat?.value?`<span class="tag">${esc(s.stat.value)}</span>`:''}<ul>${s.bullets.map(b=>`<li>${esc(b)}</li>`).join("")}</ul></div>`).join("")+
- (btn?`<button class="dl" data-dl="1">Download .pptx</button><span class="hint">New random layout every download</span>`:"")+`</div>`}
+ (btn?`<button class="dl" data-dl>Download .pptx</button><span class="hint">New random layout every download</span>`:"")+`</div>`}
 function draw(){
  $("#list").innerHTML=S.chats.map(c=>`<div class="chat ${c.id===S.active?'on':''}"><button class="ti" data-open="${c.id}">${esc(c.title)}</button><button class="x" data-del="${c.id}" aria-label="Delete chat">&times;</button></div>`).join("")||'<div class="lbl">No chats yet</div>';
  const c=cur(),li=lastIdx(c);let h="";
- if(!c)h='<div class="empty"><h1>What are we presenting?</h1><p>Paste an assignment brief or attach a document. Then keep chatting to refine the slides.</p></div>';
+ if(!c)h='<div class="empty"><h1>What are we presenting?</h1><p>Ask me anything about your assignment, or paste a brief and attach files to build slides. Then keep chatting to refine them.</p></div>';
  else c.msgs.forEach((m,i)=>{
   if(m.role==="user")h+=`<div class="u">${esc(m.text)}${m.files?.length?`<small>${m.files.map(esc).join(", ")}</small>`:""}</div>`;
-  else h+=`<div class="a"><p class="${m.err?'err':''}">${esc(m.text)}</p>`+(m.deck?(i===li?deckHTML(m.deck,true):`<details><summary>Earlier version: ${esc(m.deck.title)}</summary>${deckHTML(m.deck)}</details>`):"")+`</div>`});
+  else h+=`<div class="a"><p class="${m.err?'err':''}">${esc(m.text)}</p>`+(valid(m.deck)?(i===li?deckHTML(m.deck,true):`<details><summary>Earlier version: ${esc(m.deck.title)}</summary>${deckHTML(m.deck)}</details>`):"")+`</div>`});
  if(busy)h+='<div class="a"><p>Working on it…</p></div>';
  $("#msgs").innerHTML=h;$("#thread").scrollTop=1e9;
  $("#chips").innerHTML=pending.map((f,i)=>`<span class="chip">${esc(f.name)}<button data-rm="${i}" aria-label="Remove ${esc(f.name)}">&times;</button></span>`).join("");
@@ -92,11 +93,12 @@ async function send(){
  const text=$("#t").value.trim();if(busy||(!text&&!pending.length))return;
  let c=cur();if(!c){c={id:uid(),title:"New chat",msgs:[]};S.chats.unshift(c);S.active=c.id}
  const deck=c.msgs[lastIdx(c)]?.deck,fd=new FormData();
- fd.append("text",text);fd.append("slides",$("#n").value);fd.append("tone",$("#tone").value);
+ fd.append("text",text);fd.append("source",c.source||"");fd.append("history",JSON.stringify(c.msgs.slice(-6).map(m=>({role:m.role,text:m.text}))));fd.append("slides",$("#n").value);fd.append("tone",$("#tone").value);
  if(deck)fd.append("deck",JSON.stringify(deck));pending.forEach(f=>fd.append("files",f));
  c.msgs.push({role:"user",text,files:pending.map(f=>f.name)});pending=[];$("#t").value="";$("#t").style.height="";busy=true;save();draw();
  try{const r=await fetch("/api/outline",{method:"POST",body:fd}),j=await r.json();if(!r.ok)throw new Error(j.error);
-  const {reply,...d}=j;c.msgs.push({role:"assistant",text:reply||"Here is your deck.",deck:d});if(c.title==="New chat")c.title=d.title||"Untitled deck"}
+  c.source=j.source||c.source;c.msgs.push(j.deck?{role:"assistant",text:j.reply,deck:j.deck}:{role:"assistant",text:j.reply});
+  if(j.deck&&(c.title==="New chat"||c.auto)){c.title=j.deck.title||"Untitled deck";delete c.auto}else if(c.title==="New chat"&&text){c.title=text.slice(0,32);c.auto=true}}
  catch(e){c.msgs.push({role:"assistant",text:"Something went wrong: "+e.message,err:true})}
  busy=false;save();draw()}
 $("#go").onclick=send;
