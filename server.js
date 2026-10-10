@@ -8,6 +8,9 @@ import pdf from "pdf-parse";
 import PptxGenJS from "pptxgenjs";
 import rateLimit from "express-rate-limit";
 import sharp from "sharp";
+import JSZip from "jszip";
+import crypto from "crypto";
+import { analyzeTemplate as analyzeTpl, buildFromTemplate } from "./template.js";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -19,7 +22,7 @@ const UNSPLASH = process.env.UNSPLASH_ACCESS_KEY; // optional: enables real phot
 if (!KEY) console.warn("Missing GROQ_API_KEY");
 
 const app = express();
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "10mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 app.use("/api", rateLimit({ windowMs: 60_000, max: 8 }));
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -108,13 +111,44 @@ async function photo(q) {
 const validChart = c => c && Array.isArray(c.labels) && Array.isArray(c.values) && c.labels.length >= 2 &&
   c.labels.length <= 8 && c.labels.length === c.values.length && c.values.every(v => typeof v === "number");
 
+// ---------- template analysis (.pptx exported from Canva or PowerPoint) ----------
+const lum = h => [0, 2, 4].reduce((s, i, k) => s + parseInt(h.slice(i, i + 2), 16) / 255 * [0.2126, 0.7152, 0.0722][k], 0);
+const sat = h => { const v = [0, 2, 4].map(i => parseInt(h.slice(i, i + 2), 16)); return (Math.max(...v) - Math.min(...v)) / 255; };
+const dist = (a, b) => [0, 2, 4].reduce((s, i) => s + Math.abs(parseInt(a.slice(i, i + 2), 16) - parseInt(b.slice(i, i + 2), 16)), 0);
+
+async function analyzeTemplate(buf, name) {
+  const zip = await JSZip.loadAsync(buf);
+  const files = Object.keys(zip.files);
+  if (!files.some(f => f.startsWith("ppt/slides/") || f.startsWith("ppt/theme/"))) throw new Error("this is not a PowerPoint file");
+  let all = "";
+  for (const f of files.filter(f => /^ppt\/(slides\/slide\d+|theme\/theme1)\.xml$/.test(f))) all += " " + await zip.file(f).async("string");
+  const top = (re) => { const m = {}; for (const x of all.matchAll(re)) m[x[1]] = (m[x[1]] || 0) + 1; return Object.entries(m).sort((a, b) => b[1] - a[1]).map(e => e[0]); };
+  const uniq = [];
+  for (const c of top(/srgbClr val="([0-9A-Fa-f]{6})"/g).map(c => c.toUpperCase())) if (uniq.every(u => dist(u, c) > 60)) uniq.push(c);
+  const fonts = [...new Set(top(/<a:latin typeface="([^"+][^"]*)"/g))].slice(0, 2);
+  const fb = pick(PAL);
+  const dark = uniq.filter(c => lum(c) < 0.35).sort((a, b) => lum(a) - lum(b))[0];
+  const light = uniq.filter(c => lum(c) > 0.88).sort((a, b) => lum(b) - lum(a))[0];
+  const acc = uniq.filter(c => sat(c) > 0.25 && lum(c) > 0.15 && lum(c) < 0.9).sort((a, b) => sat(b) - sat(a));
+  const palette = { dark: dark || fb.dark, light: light || "F7F7F7", a: acc[0] || fb.a, b: acc[1] || acc[0] || fb.b, text: dark || "222222" };
+  const imgs = [];
+  const media = [];
+  for (const f of files.filter(f => /^ppt\/media\/.+\.(png|jpe?g)$/i.test(f))) media.push(await zip.file(f).async("nodebuffer"));
+  for (const b of media.filter(b => b.length > 40000).sort((a, b) => b.length - a.length).slice(0, 2)) {
+    try { imgs.push("image/jpeg;base64," + (await sharp(b).resize({ width: 1100, withoutEnlargement: true }).jpeg({ quality: 60 }).toBuffer()).toString("base64")); } catch {}
+  }
+  return { name, palette, fonts, images: imgs, swatches: [palette.dark, palette.a, palette.b, palette.light] };
+}
+
 const shuffle = a => [...a].sort(() => Math.random() - 0.5);
 const ALL = ["split", "cards", "rows", "timeline", "banner", "quote", "zigzag", "photo"];
 
 async function buildPptx(d) {
   const p = new PptxGenJS();
   p.layout = "LAYOUT_WIDE";
-  const T = pick(PAL), [HF, BF] = pick(FONTS), frame = pick(["side", "top", "none"]);
+  const th = d.theme, [rhf, rbf] = pick(FONTS);
+  const T = th?.palette ? { ...th.palette } : pick(PAL), frame = pick(["side", "top", "none"]);
+  const HF = th?.fonts?.[0] || rhf, BF = th?.fonts?.[1] || th?.fonts?.[0] || rbf;
   const R = p.ShapeType.rect, E = p.ShapeType.ellipse, BOX = Math.random() < 0.5 ? p.ShapeType.roundRect : R;
   const W = 13.33, H = 7.5, M = 0.7, G = 0.25;
   const LIGHT = { bg: T.light, fg: T.text, ti: T.dark, fill: { color: "FFFFFF" }, line: { color: "D9E0E2", width: 1 } };
@@ -124,7 +158,15 @@ async function buildPptx(d) {
 
   // ----- title slide (2 variants) -----
   const t = p.addSlide();
-  if (Math.random() < 0.5) {
+  const timg = th?.images?.length ? pick(th.images) : null;
+  if (timg && Math.random() < 0.7) {
+    t.background = { color: T.dark };
+    img(t, timg, { x: 0, y: 0, w: W, h: H, sizing: { type: "cover", w: W, h: H } });
+    t.addShape(R, { x: 0, y: 0, w: W, h: H, fill: { color: T.dark, transparency: 30 } });
+    t.addShape(R, { x: 0.7, y: 2.4, w: 0.12, h: 2.2, fill: { color: T.a } });
+    t.addText(d.title, { x: 1.1, y: 2.3, w: 10, h: 1.6, fontFace: HF, fontSize: 40, bold: true, color: "FFFFFF", valign: "top", fit: "shrink" });
+    t.addText(d.subtitle || "", { x: 1.1, y: 4.0, w: 10, h: 0.9, fontFace: BF, fontSize: 20, color: "E6EDEE", valign: "top" });
+  } else if (Math.random() < 0.5) {
     t.background = { color: T.dark };
     for (let i = 0; i < 4; i++) {
       const s = 1.5 + Math.random() * 3.5;
@@ -156,10 +198,10 @@ async function buildPptx(d) {
 
   for (const [i, s] of d.slides.entries()) {
     const sl = p.addSlide(), B = s.bullets.length ? s.bullets : [s.title], n = B.length, fz = size(B), sm = Math.max(16, fz - 3);
-    const ok = ALL.filter(m => (m !== "quote" || n >= 3) && (m !== "photo" || (UNSPLASH && s.image_query)));
+    const ok = ALL.filter(m => (m !== "quote" || n >= 3) && (m !== "photo" || th?.images?.length || (UNSPLASH && s.image_query)));
     let mode = validChart(s.chart) ? "chart" : s.stat?.value ? "stat" : choose(ok);
     let ph = null;
-    if (mode === "photo" && !(ph = await photo(s.image_query))) mode = "rows";
+    if (mode === "photo" && !(ph = th?.images?.length ? pick(th.images) : await photo(s.image_query))) mode = "rows";
     last = mode;
     const c = ["cards", "rows", "timeline", "zigzag"].includes(mode) && Math.random() < 0.3 ? DARK : LIGHT;
     sl.background = { color: c.bg };
@@ -299,13 +341,74 @@ app.post("/api/outline", upload.array("files", 5), async (req, res) => {
   } catch (e) { console.error(e); res.status(500).json({ error: e.message }); }
 });
 
+// ---------- template mode: fill the user's own .pptx ----------
+const TPL_DIR = path.join(__dirname, "templates");
+fs.mkdirSync(TPL_DIR, { recursive: true });
+const tplUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
+const photoCache = new Map();
+
+async function getPhotos(query, count) {
+  if (!UNSPLASH || !query) return [];
+  let urls = photoCache.get(query);
+  if (!urls) {
+    const r = await fetch(`https://api.unsplash.com/search/photos?per_page=8&orientation=landscape&query=${encodeURIComponent(query)}`, { headers: { Authorization: `Client-ID ${UNSPLASH}` } });
+    urls = ((await r.json()).results || []).map(x => x.urls.regular);
+    photoCache.set(query, urls);
+  }
+  const chosen = shuffle(urls).slice(0, count);
+  return (await Promise.all(chosen.map(async u => Buffer.from(await (await fetch(u)).arrayBuffer())))).filter(b => b.length);
+}
+
+async function askFills(items) {
+  const system = `You write the text for the slots of a PowerPoint template. For each slide, use its content to fill EVERY slot.
+Return ONLY JSON: {"slides":[{"fills":{"<slot key>":"text"}}]} with one entry per slide, in the same order.
+Roles: "title" = the slide title; "label" = a 2-4 word heading; "body" = one or two short sentences.
+Never exceed a slot's maxChars and aim near the length of its sample. Use only facts from the slide content: with more slots than bullets, split or expand a bullet logically; with fewer, merge. Never leave a slot empty or copy the sample text.`;
+  const r = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ model: MODEL, temperature: 0.3, response_format: { type: "json_object" },
+      messages: [{ role: "system", content: system }, { role: "user", content: JSON.stringify(items) }] }),
+  });
+  if (!r.ok) throw new Error(`Groq error ${r.status}`);
+  const arr = JSON.parse((await r.json()).choices[0].message.content).slides;
+  if (!Array.isArray(arr) || arr.length !== items.length) throw new Error("unexpected fill response");
+  return arr.map(s => s.fills || {});
+}
+
+app.post("/api/template", tplUpload.single("template"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "No file received." });
+    if (!/\.pptx$/i.test(req.file.originalname)) return res.status(400).json({ error: "Please upload a .pptx file (in Canva: Share > Download > PowerPoint)." });
+    const spec = await analyzeTpl(req.file.buffer);
+    const id = crypto.randomUUID();
+    fs.writeFileSync(path.join(TPL_DIR, id + ".pptx"), req.file.buffer);
+    fs.writeFileSync(path.join(TPL_DIR, id + ".json"), JSON.stringify(spec));
+    res.json({ id, name: req.file.originalname, swatches: spec.swatches, slides: spec.slides.length });
+  } catch (e) { console.error(e); res.status(400).json({ error: "Could not use that template: " + e.message }); }
+});
+
 app.post("/api/pptx", async (req, res) => {
   try {
-    const buf = await buildPptx(req.body);
+    const tid = req.body.theme?.id;
+    let buf;
+    if (tid && /^[0-9a-f-]{36}$/.test(tid)) {
+      const f = path.join(TPL_DIR, tid + ".pptx");
+      if (!fs.existsSync(f)) return res.status(410).json({ error: "That template is no longer on the server. Please upload it again." });
+      buf = await buildFromTemplate(fs.readFileSync(f), JSON.parse(fs.readFileSync(path.join(TPL_DIR, tid + ".json"), "utf8")), req.body, { askFills, getPhotos });
+    } else buf = await buildPptx(req.body);
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.presentationml.presentation");
     res.setHeader("Content-Disposition", 'attachment; filename="slides.pptx"');
     res.send(buf);
   } catch (e) { console.error(e); res.status(500).json({ error: e.message }); }
+});
+
+// friendly JSON errors for upload problems (instead of a crash page)
+app.use((err, req, res, next) => {
+  if (err instanceof multer.MulterError)
+    return res.status(400).json({ error: err.code === "LIMIT_FILE_SIZE" ? "That file is too large. Documents can be up to 10 MB and templates up to 100 MB." : err.message });
+  console.error(err);
+  res.status(500).json({ error: "Server error: " + err.message });
 });
 
 app.listen(process.env.PORT || 3000, () => console.log("ChatPPT running at http://localhost:" + (process.env.PORT || 3000)));

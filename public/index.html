@@ -38,6 +38,7 @@ details{margin:6px 0}summary{cursor:pointer;color:var(--mut)}
 .send{background:var(--gold);color:var(--ink);font-weight:600;border-radius:20px;padding:8px 18px}.send:disabled{opacity:.4}
 .opt{display:flex;gap:6px;align-items:center;color:var(--mut);font-size:13px}
 .opt input,.opt select{background:#2f3132;color:var(--tx);border:0;border-radius:10px;padding:4px 8px;font:inherit}.opt input{width:56px}
+.tplb{border:1px solid var(--line);border-radius:16px;padding:4px 12px;color:var(--mut);font-size:13px}.tplb:hover{color:var(--tx)}.tc{border:1px solid var(--gold)}.sw i{display:inline-block;width:12px;height:12px;border-radius:50%;margin-right:3px;vertical-align:middle}.sw{margin-right:6px}
 @media(max-width:800px){#side{position:fixed;inset:0 auto 0 0;z-index:5;transform:translateX(-100%);transition:.2s}#side.open{transform:none}#bar{display:block}}
 </style></head><body>
 <aside id="side"><div class="brand">Chat<b>PPT</b></div><button id="new">+ New chat</button><div class="lbl">Chats</div><div id="list"></div></aside>
@@ -47,13 +48,16 @@ details{margin:6px 0}summary{cursor:pointer;color:var(--mut)}
 <textarea id="t" rows="1" placeholder="Ask a question, paste a brief, attach files, or ask for slide changes"></textarea>
 <div class="row"><button class="ic" id="plus" title="Attach files" aria-label="Attach files">+</button>
 <input type="file" id="file" multiple accept=".docx,.pdf,.txt,.md" hidden>
+<button class="tplb" id="tpl" title="Use your own template (.pptx, e.g. from Canva)">Template</button><input type="file" id="tplf" accept=".pptx,.potx" hidden>
 <span class="opt" id="opt">Slides <input id="n" type="number" min="3" max="20" value="8" aria-label="Number of slides">
 <select id="tone" aria-label="Tone"><option>clear and professional</option><option>simple and student-friendly</option><option>persuasive</option><option>academic</option></select></span>
 <span class="sp"></span><button class="send" id="go">Send</button></div></div></div></main>
 <script>
 const $=s=>document.querySelector(s),KEY="chatppt.v1",uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,6);
 let S;try{S=JSON.parse(localStorage.getItem(KEY))}catch{}S=S||{chats:[],active:null};
-let pending=[],busy=false;
+let pending=[],busy=false,draftTheme=null;
+const themeOf=()=>cur()?.theme||(cur()?null:draftTheme);
+const themeChip=()=>{const t=themeOf();return t?`<span class="chip tc"><span class="sw">${t.swatches.map(c=>`<i style="background:#${c}"></i>`).join("")}</span>Template: ${esc(t.name)}<button data-tx="1" aria-label="Remove template">&times;</button></span>`:""};
 const save=()=>{try{localStorage.setItem(KEY,JSON.stringify(S))}catch{}};
 const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const cur=()=>S.chats.find(c=>c.id===S.active);
@@ -71,7 +75,7 @@ function draw(){
   else h+=`<div class="a"><p class="${m.err?'err':''}">${esc(m.text)}</p>`+(valid(m.deck)?(i===li?deckHTML(m.deck,true):`<details><summary>Earlier version: ${esc(m.deck.title)}</summary>${deckHTML(m.deck)}</details>`):"")+`</div>`});
  if(busy)h+='<div class="a"><p>Working on it…</p></div>';
  $("#msgs").innerHTML=h;$("#thread").scrollTop=1e9;
- $("#chips").innerHTML=pending.map((f,i)=>`<span class="chip">${esc(f.name)}<button data-rm="${i}" aria-label="Remove ${esc(f.name)}">&times;</button></span>`).join("");
+ $("#chips").innerHTML=themeChip()+pending.map((f,i)=>`<span class="chip">${esc(f.name)}<button data-rm="${i}" aria-label="Remove ${esc(f.name)}">&times;</button></span>`).join("");
  $("#opt").style.display=li<0?"flex":"none";$("#go").disabled=busy;
 }
 function add(l){for(const f of l){if(f.size>10485760){alert(f.name+" is over 10 MB");continue}
@@ -79,19 +83,24 @@ function add(l){for(const f of l){if(f.size>10485760){alert(f.name+" is over 10 
 $("#plus").onclick=()=>$("#file").click();$("#file").onchange=e=>{add(e.target.files);e.target.value=""};
 const box=$("#box");box.ondragover=e=>{e.preventDefault();box.classList.add("drag")};box.ondragleave=()=>box.classList.remove("drag");
 box.ondrop=e=>{e.preventDefault();box.classList.remove("drag");add(e.dataTransfer.files)};
-$("#new").onclick=()=>{S.active=null;pending=[];$("#side").classList.remove("open");draw()};
+$("#tpl").onclick=()=>$("#tplf").click();
+$("#tplf").onchange=async e=>{const f=e.target.files[0];e.target.value="";if(!f)return;if(f.size>104857600){alert("That template is over 100 MB. In Canva, download fewer pages or choose a smaller export.");return}const b=$("#tpl");b.textContent="Reading…";
+ try{const fd=new FormData();fd.append("template",f);const r=await fetch("/api/template",{method:"POST",body:fd}),j=await r.json();if(!r.ok)throw new Error(j.error);
+  const c=cur();if(c){c.theme=j;save()}else draftTheme=j;draw()}catch(x){alert(x.message)}b.textContent="Template"};
+$("#new").onclick=()=>{S.active=null;pending=[];draftTheme=null;$("#side").classList.remove("open");draw()};
 $("#menu").onclick=()=>$("#side").classList.toggle("open");
 document.addEventListener("click",async e=>{const t=e.target;
  if(t.dataset.open){S.active=t.dataset.open;save();$("#side").classList.remove("open");draw()}
  if(t.dataset.del&&confirm("Delete this chat?")){S.chats=S.chats.filter(c=>c.id!==t.dataset.del);if(S.active===t.dataset.del)S.active=null;save();draw()}
+ if(t.dataset.tx){const c=cur();if(c)c.theme=null;else draftTheme=null;save();draw()}
  if(t.dataset.rm){pending.splice(+t.dataset.rm,1);draw()}
  if(t.dataset.dl){const c=cur(),d=c.msgs[lastIdx(c)].deck;t.disabled=true;
-  try{const r=await fetch("/api/pptx",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});if(!r.ok)throw 0;
+  try{const r=await fetch("/api/pptx",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...d,theme:c.theme||null})});if(!r.ok)throw new Error((await r.json().catch(()=>({}))).error||"Download failed");
    const a=document.createElement("a");a.href=URL.createObjectURL(await r.blob());a.download=(d.title||"slides").replace(/[^\w ]/g,"")+".pptx";a.click()}
-  catch{alert("Download failed")}t.disabled=false}});
+  catch(x){alert(x.message||"Download failed")}t.disabled=false}});
 async function send(){
  const text=$("#t").value.trim();if(busy||(!text&&!pending.length))return;
- let c=cur();if(!c){c={id:uid(),title:"New chat",msgs:[]};S.chats.unshift(c);S.active=c.id}
+ let c=cur();if(!c){c={id:uid(),title:"New chat",msgs:[],theme:draftTheme};draftTheme=null;S.chats.unshift(c);S.active=c.id}
  const deck=c.msgs[lastIdx(c)]?.deck,fd=new FormData();
  fd.append("text",text);fd.append("source",c.source||"");fd.append("history",JSON.stringify(c.msgs.slice(-6).map(m=>({role:m.role,text:m.text}))));fd.append("slides",$("#n").value);fd.append("tone",$("#tone").value);
  if(deck)fd.append("deck",JSON.stringify(deck));pending.forEach(f=>fd.append("files",f));
