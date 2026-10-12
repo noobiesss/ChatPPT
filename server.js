@@ -16,10 +16,23 @@ import path from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const KEY = process.env.GROQ_API_KEY;
-const MODEL = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
+// ---- AI provider (any OpenAI-compatible API). Switch with LLM_PROVIDER in .env ----
+const PRESETS = {
+  groq: ["https://api.groq.com/openai/v1", "openai/gpt-oss-120b"],
+  cerebras: ["https://api.cerebras.ai/v1", "gpt-oss-120b"],
+  gemini: ["https://generativelanguage.googleapis.com/v1beta/openai", "gemini-3.5-flash"],
+  openrouter: ["https://openrouter.ai/api/v1", ""],
+};
+const PROVIDER = (process.env.LLM_PROVIDER || "groq").toLowerCase();
+const [PRESET_URL, PRESET_MODEL] = PRESETS[PROVIDER] || ["", ""];
+const BASE = process.env.LLM_BASE_URL || PRESET_URL;
+const KEY = process.env.LLM_API_KEY || process.env.GROQ_API_KEY;
+const MODEL = process.env.LLM_MODEL || process.env.GROQ_MODEL || PRESET_MODEL;
+if (!BASE) console.warn(`Unknown LLM_PROVIDER "${PROVIDER}". Set LLM_BASE_URL too.`);
+if (!MODEL) console.warn("Set LLM_MODEL in .env for this provider.");
 const UNSPLASH = process.env.UNSPLASH_ACCESS_KEY; // optional: enables real photos
-if (!KEY) console.warn("Missing GROQ_API_KEY");
+if (!KEY) console.warn("Missing LLM_API_KEY (or GROQ_API_KEY) in .env");
+else console.log(`AI: ${PROVIDER} / ${MODEL}`);
 
 const app = express();
 app.use(express.json({ limit: "10mb" }));
@@ -38,15 +51,35 @@ const ICONS = ["lightbulb","target","users","book-open","rocket","shield","globe
   "code","database","heart","star","trending-up","settings","graduation-cap","scale","leaf","brain",
   "message-square","file-text","calendar","zap","lock","map-pin","award","puzzle","layers","camera"];
 
+// one place that talks to the AI provider and returns parsed JSON
+async function chatJSON(system, user, temperature) {
+  for (const jsonMode of [true, false]) {
+    const body = { model: MODEL, temperature: jsonMode ? temperature : 0.2, max_tokens: +process.env.LLM_MAX_TOKENS || 7000,
+      messages: [{ role: "system", content: system }, { role: "user", content: user }] };
+    if (jsonMode && process.env.LLM_JSON_MODE !== "off") body.response_format = { type: "json_object" };
+    if (/gpt-oss/i.test(MODEL) && ["groq", "cerebras"].includes(PROVIDER)) body.reasoning_effort = process.env.LLM_REASONING || "low"; // less thinking = shorter, complete JSON
+    const r = await fetch(`${BASE}/chat/completions`, { method: "POST", headers: { Authorization: `Bearer ${KEY}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (!r.ok) {
+      const txt = await r.text();
+      if (jsonMode && r.status === 400 && /json_validate_failed/.test(txt)) continue; // the provider's JSON check failed: retry without it
+      throw new Error(`AI error ${r.status} (${PROVIDER}): ${txt.slice(0, 200)}`);
+    }
+    const text = (await r.json()).choices[0].message.content || "";
+    const clean = text.replace(/^[\s\S]*?(?=\{)/, "").replace(/\}[^}]*$/, "}"); // drop code fences / chatter around the JSON
+    try { return JSON.parse(clean); } catch { if (jsonMode) continue; }
+  }
+  throw new Error("The AI returned incomplete JSON. Please try again, or ask for fewer slides.");
+}
+
 const DECK = `{"title":string,"subtitle":string,"icon":string,"slides":[{"title":string,"bullets":[string],"notes":string,"icon":string,"image_query":string,"stat":{"value":string,"label":string}|null,"chart":{"type":"bar"|"pie"|"doughnut"|"line","title":string,"labels":[string],"values":[number]}|null}]}`;
-const RULES = `Deck rules: "icon" must be one of: ${ICONS.join(", ")}. "image_query" = 1-3 concrete words for a stock photo. 3-4 bullets per slide, max 14 words each. Slide titles state the point; notes = 2-3 sentences for the presenter. Use "stat" or "chart" only when the source really has those numbers (max 2 each), otherwise null. Never invent data. With no source material, use well-established general knowledge and avoid specific statistics.`;
+const RULES = `Deck rules: "icon" must be one of: ${ICONS.join(", ")}. "image_query" = 1-3 concrete words for a stock photo. 3-5 bullets per slide, each a complete point of 8-20 words with a concrete fact or example (never a fragment), written without trailing punctuation or semicolons. Slide titles state the point; notes = 2-3 sentences for the presenter. Use "stat" or "chart" only when the source really has those numbers (max 2 each), otherwise null. Never invent data. With no source material, use well-established general knowledge and avoid specific statistics.`;
 
 async function askGroq(o) {
   const system = `You are ChatPPT, a friendly assistant that both answers questions and builds PowerPoint decks for coursework.
 Return ONLY JSON: {"reply": string, "deck": ${DECK} | null}.
 Decide from the user's message:
 1. Question, chat, advice or explanation (for example about the assignment, the slides, or the topic): answer helpfully in "reply" (plain text, up to about 150 words, short paragraphs), use the SOURCE MATERIAL when relevant, and set "deck" to null.
-2. Request to make slides, or a pasted/attached brief with no other instruction: build a full deck with exactly ${o.slides} content slides (or the number the user asks for), covering every requirement and marking criterion in the source. Audience: ${o.audience}. Tone: ${o.tone}.
+2. Request to make slides, or a pasted/attached brief with no other instruction: build a full deck. Cover EVERY main heading and section of the source: use ${o.slides} content slides, but if the source has more main sections than that, use one slide per section (maximum 20) so nothing is left out, and merge only truly minor points. Include the specific facts, numbers and examples from the source, and every requirement or marking criterion. Audience: ${o.audience}. Tone: ${o.tone}.
 3. Request to change the CURRENT DECK: return the FULL updated deck and keep slides the user did not mention unchanged.
 When you return a deck, "reply" is one friendly sentence about what you made or changed.
 ${RULES}`;
@@ -56,18 +89,11 @@ ${RULES}`;
     o.history.length && `RECENT CHAT:\n${o.history.slice(-6).map(m => `${m.role}: ${String(m.text).slice(0, 600)}`).join("\n")}`,
     `USER MESSAGE:\n${o.text || "(files attached, no message)"}`,
   ].filter(Boolean).join("\n\n");
-  const r = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${KEY}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ model: MODEL, temperature: 0.4, response_format: { type: "json_object" },
-      messages: [{ role: "system", content: system }, { role: "user", content: user }] }),
-  });
-  if (!r.ok) throw new Error(`Groq error ${r.status}: ${(await r.text()).slice(0, 200)}`);
-  const out = JSON.parse((await r.json()).choices[0].message.content);
+  const out = await chatJSON(system, user, 0.4);
   const reply = String(out.reply || "").trim();
   if (!out.deck) return { reply: reply || "I'm here. Ask me a question, or tell me what slides to make.", deck: null };
   const good = s => s && s.title && Array.isArray(s.bullets) && s.bullets.some(b => String(b).trim());
-  const slides = (out.deck.slides || []).filter(good).map(s => ({ ...s, bullets: s.bullets.slice(0, 5) }));
+  const slides = (out.deck.slides || []).filter(good).map(s => ({ ...s, bullets: s.bullets.slice(0, 5).map(b => String(b).replace(/^[\s\u2022*-]+/, "").replace(/\s*[;,]+\s*$/, "").trim()) }));
   if (!slides.length) return { reply: reply || "I couldn't build slides from that. Could you tell me more?", deck: null };
   if (o.deck && slides.length < o.deck.slides.length / 2 && !/(fewer|shorter|reduce|cut|remove|delete|only)/i.test(o.text))
     return { reply: "That change looked wrong, so I kept your deck as it was. Could you rephrase it?", deck: null };
@@ -335,7 +361,7 @@ app.post("/api/outline", upload.array("files", 5), async (req, res) => {
     if (text.length >= 200) material += "\n\n" + text; // a long pasted brief counts as source material
     if (!text && !material.trim()) return res.status(400).json({ error: "Type a message or attach a file first." });
     const source = ((req.body.source || "") + material).slice(0, 30000);
-    const slides = Math.min(Math.max(parseInt(req.body.slides) || 8, 3), 20);
+    const slides = Math.min(Math.max(parseInt(req.body.slides) || 10, 3), 20);
     const out = await askGroq({ text, source, deck, history, slides, audience: req.body.audience || "university lecturers", tone: req.body.tone || "clear and professional" });
     res.json({ ...out, source });
   } catch (e) { console.error(e); res.status(500).json({ error: e.message }); }
@@ -363,15 +389,8 @@ async function askFills(items) {
   const system = `You write the text for the slots of a PowerPoint template. For each slide, use its content to fill EVERY slot.
 Return ONLY JSON: {"slides":[{"fills":{"<slot key>":"text"}}]} with one entry per slide, in the same order.
 Roles: "title" = the slide title; "label" = a 2-4 word heading; "body" = one or two short sentences.
-Never exceed a slot's maxChars and aim near the length of its sample. Use only facts from the slide content: with more slots than bullets, split or expand a bullet logically; with fewer, merge. Never leave a slot empty or copy the sample text.`;
-  const r = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${KEY}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ model: MODEL, temperature: 0.3, response_format: { type: "json_object" },
-      messages: [{ role: "system", content: system }, { role: "user", content: JSON.stringify(items) }] }),
-  });
-  if (!r.ok) throw new Error(`Groq error ${r.status}`);
-  const arr = JSON.parse((await r.json()).choices[0].message.content).slides;
+Never exceed a slot's maxChars and aim near the length of its sample. Use only facts from the slide content: with more slots than bullets, split or expand a bullet logically; with fewer, merge. Use the slide's notes to write fuller sentences where a slot is large, but stay within maxChars. Never leave a slot empty, never end text with a semicolon, and never copy the sample text.`;
+  const arr = (await chatJSON(system, JSON.stringify(items), 0.3)).slides;
   if (!Array.isArray(arr) || arr.length !== items.length) throw new Error("unexpected fill response");
   return arr.map(s => s.fills || {});
 }
@@ -395,7 +414,10 @@ app.post("/api/pptx", async (req, res) => {
     if (tid && /^[0-9a-f-]{36}$/.test(tid)) {
       const f = path.join(TPL_DIR, tid + ".pptx");
       if (!fs.existsSync(f)) return res.status(410).json({ error: "That template is no longer on the server. Please upload it again." });
-      buf = await buildFromTemplate(fs.readFileSync(f), JSON.parse(fs.readFileSync(path.join(TPL_DIR, tid + ".json"), "utf8")), req.body, { askFills, getPhotos });
+      const tplBuf = fs.readFileSync(f), jf = path.join(TPL_DIR, tid + ".json");
+      let spec = JSON.parse(fs.readFileSync(jf, "utf8"));
+      if (spec.v !== 2) { spec = await analyzeTpl(tplBuf); fs.writeFileSync(jf, JSON.stringify(spec)); } // re-read templates saved by an older version
+      buf = await buildFromTemplate(tplBuf, spec, req.body, { askFills, getPhotos });
     } else buf = await buildPptx(req.body);
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.presentationml.presentation");
     res.setHeader("Content-Disposition", 'attachment; filename="slides.pptx"');
