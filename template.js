@@ -193,7 +193,7 @@ const cleanText = s => String(s ?? "").replace(/^[\s\u2022*-]+/, "").replace(/\s
 function bestSize(text, w, h, sz, role, W = 13.33) {
   if (role === "title") return fitSize(text, w, h, sz);
   const longest = Math.max(...text.split(/\s+/).map(x => x.length), 1);
-  for (let f = Math.min(Math.max(sz * 1.4, 1.3 * W), sz * 2.5); f > sz * 0.35; f -= 0.5) if (cap(w, h, f) * 0.8 >= text.length && longest * f * 0.65 / 72 <= w * 0.9) return f;
+  for (let f = Math.min(Math.max(sz * 1.4, 1.9 * W), sz * 2.6); f > sz * 0.35; f -= 0.5) if (cap(w, h, f) * 0.8 >= text.length && longest * f * 0.65 / 72 <= w * 0.9) return f;
   return sz * 0.35;
 }
 
@@ -215,13 +215,58 @@ function tidy(xml, k, kind, used, deck, spec, H) {
     if (!s.text || used.has(s.id) || /^\d{1,2}$/.test(s.text)) continue;
     let t = null;
     if (/^page\s*\d+$/i.test(s.text)) t = `Page ${String(k + 1).padStart(2, "0")}`;
-    else if (s === topBand[0] && chrome.has(s.text.toLowerCase())) t = s.text === s.text.toUpperCase() ? deck.title.toUpperCase() : deck.title;
+    else if (s === topBand[0] && chrome.has(s.text.toLowerCase())) t = fitSize(deck.title, s.w, s.h, s.sz) >= 0.8 * s.sz ? (s.text === s.text.toUpperCase() ? deck.title.toUpperCase() : deck.title) : "";
     else if (chrome.has(s.text.toLowerCase()) || /@|www\.|\.com\b|\+?\d[\d\s().-]{7,}|\b(street|st\.|avenue|ave\.)/i.test(s.text)) t = "";
     else if (kind !== "closing") t = "";
     if (t === "" && kind === "closing" && !chrome.has(s.text.toLowerCase())) xml = dropIconsNear(xml, s);
     if (t !== null) xml = xml.split(s.raw).join(setText(s.raw, t, s.w, s.h, t ? fitSize(t, s.w, s.h, s.sz) : s.sz));
   }
   return xml;
+}
+
+
+const setGeom = (raw, g) => raw.replace(/<a:off x="-?\d+" y="-?\d+"\/>(\s*)<a:ext cx="\d+" cy="\d+"/, (m, sp) => `<a:off x="${E9(g.x)}" y="${E9(g.y)}"/>${sp}<a:ext cx="${E9(g.w)}" cy="${E9(g.h)}"`);
+
+// Use the free space: the title may take two lines, the text boxes below it move down, grow taller and wider, and share the column evenly.
+function reflow(items, xml, W, H) {
+  if (items.some(x => x.sl.role === "label")) return; // paired label/body layouts keep their geometry
+  const tl = items.find(x => x.sl.role === "title" && x.text);
+  const bodies = items.filter(x => x.sl.role === "body" && x.text);
+  if (tl) {
+    const g = tl.sl, longest = Math.max(...tl.text.split(/\s+/).map(x => x.length), 1);
+    let f = g.sz, lines = 1;
+    for (; f > g.sz * 0.45; f -= 0.5) {
+      const cpl = Math.floor(g.w / (f * 0.62 / 72));
+      if (longest * f * 0.65 / 72 > g.w * 0.9) continue;
+      if (cpl * 0.9 >= tl.text.length) { lines = 1; break; }
+      if (cpl * 2 * 0.9 >= tl.text.length) { lines = 2; break; }
+    }
+    g.h = lines * f * 1.2 / 72 + 0.08;
+  }
+  const mine = new Set(items.map(x => `${x.sl.x.toFixed(2)},${x.sl.y.toFixed(2)}`));
+  const empties = new Set(parseShapes(xml).filter(s => s.empty).map(s => `${s.x.toFixed(2)},${s.y.toFixed(2)}`));
+  const obs = topLevelBoxes(xml).filter(b => b.w * b.h < 0.45 * W * H && !mine.has(`${b.x.toFixed(2)},${b.y.toFixed(2)}`) && !empties.has(`${b.x.toFixed(2)},${b.y.toFixed(2)}`));
+  const clusters = [];
+  for (const b of [...bodies].sort((a, c) => a.sl.x - c.sl.x || a.sl.y - c.sl.y)) {
+    const c = clusters.find(c => Math.abs(c[0].sl.x - b.sl.x) < 0.6);
+    c ? c.push(b) : clusters.push([b]);
+  }
+  const tBottom = tl ? tl.sl.y + tl.sl.h : 0;
+  for (const c of clusters) {
+    c.sort((a, b) => a.sl.y - b.sl.y);
+    const x0 = Math.min(...c.map(b => b.sl.x)), w0 = Math.max(...c.map(b => b.sl.w));
+    let top = Math.min(...c.map(b => b.sl.y));
+    if (tl && x0 < tl.sl.x + tl.sl.w && x0 + w0 > tl.sl.x) top = Math.max(top, tBottom + 0.3);
+    const others = items.filter(x => !c.includes(x) && x !== tl).map(x => x.sl);
+    const wall = [...obs, ...others];
+    let bottom = Math.min(H - 1.4, ...wall.filter(o => o.x < x0 + w0 && o.x + o.w > x0 && o.y > top + 0.8).map(o => o.y - 0.3));
+    const right = wall.filter(o => o.x > x0 + 1 && o.y < bottom && o.y + o.h > top).map(o => o.x - 0.5);
+    const w = Math.min(Math.max(w0, Math.min(...right, x0 + 1.4 * w0) - x0), 1.4 * w0);
+    const n = c.length, gap = 0.3;
+    if (bottom - top < n * 0.9) continue;
+    const h = n === 1 ? Math.min(bottom - top, 3.5) : (bottom - top - gap * (n - 1)) / n;
+    c.forEach((b, k) => Object.assign(b.sl, { x: x0, y: top + k * (h + gap), w, h }));
+  }
 }
 
 
@@ -253,7 +298,7 @@ export async function buildFromTemplate(buf, spec, deck, { askFills, getPhotos }
     let best = null;
     for (const i of cands) {
       const U = S[i].units.length, avg = s.bullets.reduce((a, b) => a + b.length, 0) / Math.max(1, s.bullets.length);
-      const small = S[i].units.filter(u => cap(u.body.w, u.body.h, u.body.sz * 1.4) < 0.7 * avg).length;
+      const small = S[i].units.filter(u => cap(u.body.w, Math.max(u.body.h, 2), 0.8 * (spec.W || 13.33)) * 0.8 < avg).length;
       const c = (U ? Math.abs(U - s.bullets.length) + 2 * small / U : 2.5) + (uses[i] || 0) * 1.5 + (i === prev ? 3 : 0) + Math.random() * 1.2;
       if (!best || c < best.c) best = { i, c };
     }
@@ -278,14 +323,15 @@ export async function buildFromTemplate(buf, spec, deck, { askFills, getPhotos }
     if (p.kind !== "closing") {
       const shapes = Object.fromEntries(parseShapes(xml).map(s => [s.id, s]));
       const items = slotsOf(src).map(sl => ({ sl, s: shapes[sl.id], text: cleanText(f[sl.key]) })).filter(x => x.s);
+      reflow(items, xml, W, H);
       items.forEach(x => { x.fs = x.text ? bestSize(x.text, x.sl.w, x.sl.h, x.sl.sz, x.sl.role, W) : x.sl.sz; });
       const titleFs = items.find(x => x.sl.role === "title" && x.text)?.fs;
       for (const role of ["body", "label"]) {
         const g = items.filter(x => x.sl.role === role && x.text);
         if (g.length > 1) { const u = Math.max(Math.min(...g.map(x => x.fs)), 0.6 * Math.max(...g.map(x => x.fs))); g.forEach(x => { x.fs = Math.min(x.fs, u); }); }
-        if (titleFs) g.forEach(x => { x.fs = Math.min(x.fs, titleFs * 0.75); });
+        if (titleFs) g.forEach(x => { x.fs = Math.min(x.fs, titleFs * 0.85); });
       }
-      for (const x of items) xml = xml.split(x.s.raw).join(setText(x.s.raw, x.text, x.sl.w, x.sl.h, x.fs));
+      for (const x of items) xml = xml.split(x.s.raw).join(setText(setGeom(x.s.raw, x.sl), x.text, x.sl.w, x.sl.h, x.fs));
       xml = tidy(xml, k, p.kind, new Set(items.map(x => x.sl.id)), deck, spec, H);
       const query = p.kind === "content" ? (p.slide.image_query || p.slide.title) : deck.title;
       const refs = (rels.match(/<Relationship\b[^>]*>/g) || []).filter(t => /Target="[^"]*\.jpe?g"/i.test(t) && xml.includes(`r:embed="${attr(t, /Id="([^"]+)"/)}"`));
